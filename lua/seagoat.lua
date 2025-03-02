@@ -1,6 +1,3 @@
-
-
-
 local M = {}
 
 -- Helper: Process spinner output from stderr.
@@ -27,16 +24,15 @@ function M.search(query)
   end
 
   local cwd = vim.fn.getcwd()
-  local stdout_lines = {}  -- We'll store each stdout line as it arrives.
 
-  local job_id = vim.fn.jobstart({ "seagoat", "-g", query, cwd }, {
-    -- We use unbuffered mode to handle partial updates as they come.
-    stdout_buffered = false,
+  -- We'll collect stdout lines in-memory, then write them to a temp file after the job ends.
+  local stdout_lines = {}
+
+  local job_id = vim.fn.jobstart({ "seagoat", "-g", query, "--vimgrep", cwd }, {
+    stdout_buffered = false, -- read chunks as they arrive
     stderr_buffered = false,
 
     on_stdout = function(_, data, _)
-      -- Each element of `data` typically corresponds to a line (or partial line).
-      -- We'll insert non-empty lines into our table for the quickfix list.
       if data then
         for _, line in ipairs(data) do
           if line ~= "" then
@@ -47,7 +43,7 @@ function M.search(query)
     end,
 
     on_stderr = function(_, data, _)
-      -- We treat stderr as spinner output; parse & update the spinner in the command line.
+      -- We treat stderr as spinner output.
       if data then
         local spinner = process_spinner_data(data)
         if spinner and spinner ~= "" then
@@ -57,22 +53,21 @@ function M.search(query)
     end,
 
     on_exit = function(_, exit_code, _)
-      -- If SeaGOAT fails, show an error.
       if exit_code ~= 0 then
         vim.notify("SeaGOAT exited with code: " .. exit_code, vim.log.levels.ERROR)
       end
 
-      -- Convert stdout_lines to a quickfix list.
-      local qf_items = {}
-      for _, line in ipairs(stdout_lines) do
-        table.insert(qf_items, { text = line })
-      end
+      -- Write all captured lines to a temporary file.
+      local temp_file = vim.fn.tempname()
+      local f = io.open(temp_file, "w")
+      f:write(table.concat(stdout_lines, "\n") .. "\n")
+      f:close()
 
-      local title = 'SeaGOAT Results for "' .. query .. '"'
-      vim.fn.setqflist({}, " ", { title = title, items = qf_items })
+      -- Now ask Neovim to parse that file as a vimgrep result list.
+      vim.cmd("cfile " .. temp_file)
       vim.cmd("copen")
 
-      -- Clear the spinner message.
+      -- Clear the spinner message from the command line.
       vim.api.nvim_echo({ { "" } }, false, {})
     end,
   })
@@ -87,5 +82,3 @@ vim.api.nvim_create_user_command("SeaGOAT", function(opts)
 end, { nargs = 1 })
 
 return M
-
-
