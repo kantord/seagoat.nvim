@@ -1,4 +1,3 @@
-
 local M = {}
 
 -- Function to run SeaGOAT with the provided query.
@@ -36,19 +35,22 @@ function M.search(query)
     end,
     on_exit = function(_, exit_code, _)
       if exit_code ~= 0 then
-        vim.notify("SeaGOAT exited with code: " .. exit_code, vim.log.levels.ERROR)
+        -- If exit_code isn't zero and we have stderr lines, show them with a blocking message:
+        if #stderr_lines > 0 then
+          vim.api.nvim_err_writeln(table.concat(stderr_lines, "\n"))
+        else
+          -- Otherwise just notify that SeaGOAT exited with a non-zero code:
+          vim.api.nvim_err_writeln("SeaGOAT exited with code: " .. exit_code)
+        end
+        return
       end
 
+      -- If we're here, exit_code was 0. Proceed with normal logic:
       if #stdout_lines > 0 then
-        -- Directly set the quickfix list using the lines returned by SeaGOAT.
         vim.fn.setqflist({}, "r", { lines = stdout_lines, title = "SeaGOAT Results" })
         vim.cmd("copen")
       else
         vim.notify("No valid search results from SeaGOAT.", vim.log.levels.INFO)
-      end
-
-      if #stderr_lines > 0 then
-        vim.notify(table.concat(stderr_lines, "\n"), vim.log.levels.INFO)
       end
     end,
   })
@@ -64,4 +66,3 @@ vim.api.nvim_create_user_command("SeaGOAT", function(opts)
 end, { nargs = 1 })
 
 return M
-
