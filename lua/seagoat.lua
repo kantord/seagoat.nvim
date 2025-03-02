@@ -1,4 +1,23 @@
+
+
+
 local M = {}
+
+-- Helper: Process spinner output from stderr.
+local function process_spinner_data(data)
+  local spinner_line = ""
+  for _, chunk in ipairs(data) do
+    chunk = chunk:gsub("\n", "")
+    local parts = vim.split(chunk, "\r")
+    spinner_line = parts[#parts] or spinner_line
+  end
+  return spinner_line
+end
+
+-- Helper: Update the command line with the spinner text.
+local function update_spinner(spinner_text)
+  vim.api.nvim_echo({ { spinner_text, "None" } }, false, {})
+end
 
 -- Function to run SeaGOAT with the provided query.
 function M.search(query)
@@ -8,14 +27,16 @@ function M.search(query)
   end
 
   local cwd = vim.fn.getcwd()
-  local stdout_lines = {}
-  local stderr_lines = {}
+  local stdout_lines = {}  -- We'll store each stdout line as it arrives.
 
-  -- Start the SeaGOAT process with -g, --vimgrep and the current working directory.
-  local job_id = vim.fn.jobstart({ "seagoat", "-g", "--vimgrep", query, cwd }, {
-    stdout_buffered = true,
-    stderr_buffered = true,
+  local job_id = vim.fn.jobstart({ "seagoat", "-g", query, cwd }, {
+    -- We use unbuffered mode to handle partial updates as they come.
+    stdout_buffered = false,
+    stderr_buffered = false,
+
     on_stdout = function(_, data, _)
+      -- Each element of `data` typically corresponds to a line (or partial line).
+      -- We'll insert non-empty lines into our table for the quickfix list.
       if data then
         for _, line in ipairs(data) do
           if line ~= "" then
@@ -24,34 +45,35 @@ function M.search(query)
         end
       end
     end,
+
     on_stderr = function(_, data, _)
+      -- We treat stderr as spinner output; parse & update the spinner in the command line.
       if data then
-        for _, line in ipairs(data) do
-          if line ~= "" then
-            table.insert(stderr_lines, line)
-          end
+        local spinner = process_spinner_data(data)
+        if spinner and spinner ~= "" then
+          update_spinner(spinner)
         end
       end
     end,
+
     on_exit = function(_, exit_code, _)
+      -- If SeaGOAT fails, show an error.
       if exit_code ~= 0 then
-        -- If exit_code isn't zero and we have stderr lines, show them with a blocking message:
-        if #stderr_lines > 0 then
-          vim.api.nvim_err_writeln(table.concat(stderr_lines, "\n"))
-        else
-          -- Otherwise just notify that SeaGOAT exited with a non-zero code:
-          vim.api.nvim_err_writeln("SeaGOAT exited with code: " .. exit_code)
-        end
-        return
+        vim.notify("SeaGOAT exited with code: " .. exit_code, vim.log.levels.ERROR)
       end
 
-      -- If we're here, exit_code was 0. Proceed with normal logic:
-      if #stdout_lines > 0 then
-        vim.fn.setqflist({}, "r", { lines = stdout_lines, title = "SeaGOAT Results" })
-        vim.cmd("copen")
-      else
-        vim.notify("No valid search results from SeaGOAT.", vim.log.levels.INFO)
+      -- Convert stdout_lines to a quickfix list.
+      local qf_items = {}
+      for _, line in ipairs(stdout_lines) do
+        table.insert(qf_items, { text = line })
       end
+
+      local title = 'SeaGOAT Results for "' .. query .. '"'
+      vim.fn.setqflist({}, " ", { title = title, items = qf_items })
+      vim.cmd("copen")
+
+      -- Clear the spinner message.
+      vim.api.nvim_echo({ { "" } }, false, {})
     end,
   })
 
@@ -60,9 +82,10 @@ function M.search(query)
   end
 end
 
--- Create a Neovim command ":SeaGOAT" that requires a query argument.
 vim.api.nvim_create_user_command("SeaGOAT", function(opts)
   M.search(opts.args)
 end, { nargs = 1 })
 
 return M
+
+
